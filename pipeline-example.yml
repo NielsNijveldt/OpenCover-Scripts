@@ -1,0 +1,70 @@
+pool:
+  name: BuildServer
+
+steps:
+- task: CopyFiles@2
+  displayName: 'Copy OpenCover Files to build agent'
+  inputs:
+    SourceFolder: '$(SharePath)\opencover'
+    TargetFolder: '$(Build.SourcesDirectory)\opencover'
+
+- task: WindowsMachineFileCopy@2
+  displayName: 'Copy OpenCover files to targetmachine '
+  inputs:
+    SourcePath: '$(Build.SourcesDirectory)\opencover'
+    MachineNames: '$(Server)'
+    AdminUserName: '$(User)'
+    AdminPassword: '$(UserPassword)'
+    TargetPath: '$(TargetPath)\opencover'
+
+- task: PowerShell@2
+  displayName: 'Start OpenCover'
+  inputs:
+    targetType: filePath
+    filePath: './opencover/scripts/InvokeOpenCover.ps1'
+    arguments: '-openCoverScriptPath "$(TargetPath)\opencover\scripts" -applicationName "$(ApplicationName)" -openCoverConsoleExecutablePath "$(TargetPath)\opencover\OpenCover.Console.exe" -targetDir "$(ApplicationFolder)" -outputFileDir "$(OpenCoverResultFolder)\result.xml" -serverName "$(Server)" -userName "$(User)" -password "$(UserPassword)" -warmupRequestUrl "$(WarmUpApiUrl)"'
+
+dependsOn: Job_1
+pool:
+  name: BuildServer
+  # Insert test tasks here
+
+dependsOn: Job_2
+pool:
+  name: BuildServer
+
+steps:
+- task: CopyFiles@2
+  displayName: 'Copy OpenCover Files'
+  inputs:
+    SourceFolder: '$(SharePath)\opencover'
+    TargetFolder: '$(Build.SourcesDirectory)\opencover'
+
+- task: PowerShell@2
+  displayName: 'Stop OpenCover and Copy reports'
+  inputs:
+    targetType: filePath
+    filePath: '.\opencover\scripts\StopOpenCover.ps1'
+    arguments: '-applicationName $(ApplicationName) -serverName "$(Server)" -userName "$(User)" -password "$(UserPassword)" -outputFolder "$(OpenCoverResultFolder)" -buildServerFolder "$(Build.SourcesDirectory)\opencover-reports"'
+
+- powershell: |
+   $content = (Get-Content $(Build.SourcesDirectory)\opencover-reports\result.xml) -replace '(\w\:)\\(\w+)\\(\d+)\\(\w+)', '$(Build.SourcesDirectory)'; 
+   [System.IO.File]::WriteAllLines( '$(Build.SourcesDirectory)\opencover-reports\result.xml', $content)
+  displayName: 'Replace paths in OpenCover Result file'
+
+# This step could be replaced by the Azure DevOps Task: https://marketplace.visualstudio.com/items?itemName=Palmmedia.reportgenerator
+- powershell: '& "opencover\ReportGenerator\net47\ReportGenerator.exe" -reports:"$(Build.SourcesDirectory)\opencover-reports\result.xml" -targetdir:"$(Build.SourcesDirectory)\opencover-reports\reports" -reporttypes:"cobertura;lcov;SonarQube;HtmlInline_AzurePipelines;Badges"'
+  displayName: ReportGenerator
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact: Results'
+  inputs:
+    PathtoPublish: '$(Build.SourcesDirectory)\opencover-reports'
+    ArtifactName: Results
+
+- task: PublishCodeCoverageResults@1
+  displayName: 'Publish code coverage from $(Build.SourcesDirectory)\opencover-reports\reports\Cobertura.xml'
+  inputs:
+    codeCoverageTool: Cobertura
+    summaryFileLocation: '$(Build.SourcesDirectory)\opencover-reports\reports\Cobertura.xml'
+    reportDirectory: '$(Build.SourcesDirectory)\opencover-reports\reports'
